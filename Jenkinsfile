@@ -2,22 +2,31 @@ pipeline {
     agent any
 
     environment {
-        REGISTRY = "my-docker-registry.com"
-        IMAGE_NAME = "checkout-service"
+        DOCKERHUB_USERNAME = "savitanalawade"
+        IMAGE_NAME = "docker-image"
         SONARQUBE_ENV = "sonarqube-server"
     }
 
     stages {
+
         stage('Checkout') {
             steps {
-                git branch: 'master', url: 'https://github.com/Savita-Nalawade/AwsDevops.git'
+                git branch: 'dev',
+                    url: 'https://github.com/Savita-Nalawade/AwsDevops.git'
             }
         }
 
-        stage('Build with Maven') {
+        stage('Build') {
             steps {
                 sh 'mvn clean package'
-                echo 'Artifact Creation Completed'
+                echo 'Build Completed'
+            }
+        }
+
+        stage('Unit Test') {
+            steps {
+                sh 'mvn test'
+                echo 'Unit Tests Completed'
             }
         }
 
@@ -29,22 +38,53 @@ pipeline {
             }
         }
 
-        stage('Unit Tests') {
+        stage('Quality Gate') {
             steps {
-                sh 'mvn test'
-            }
-        }
-
-        stage('Docker Build & Push') {
-            steps {
-                withCredentials([usernamePassword(credentialsId: 'docker-creds',
-                                                 usernameVariable: 'DOCKER_USER',
-                                                 passwordVariable: 'DOCKER_PASS')]) {
-                    sh """
-                        echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin $REGISTRY
-                        docker build -t $REGISTRY/$IMAGE_NAME:${env.BUILD_NUMBER} .
-                        docker push $REGISTRY/$IMAGE_NAME:${env.BUILD_NUMBER}
-                    """
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
                 }
             }
         }
+
+        stage('Build Docker Image') {
+            steps {
+                sh """
+                docker build -t ${DOCKERHUB_USERNAME}/${IMAGE_NAME}:latest .
+                """
+                echo 'Docker Image Build Completed'
+            }
+        }
+
+        stage('Trivy Scan') {
+            steps {
+                sh """
+                trivy image ${DOCKERHUB_USERNAME}/${IMAGE_NAME}:latest
+                """
+            }
+        }
+
+        stage('Push To Docker Hub') {
+            steps {
+                withCredentials([
+                    string(credentialsId: 'dockerhubCred',
+                    variable: 'dockerhubCred')
+                ]) {
+
+                    sh """
+                    docker login -u ${DOCKERHUB_USERNAME} -p ${dockerhubCred}
+                    docker push ${DOCKERHUB_USERNAME}/${IMAGE_NAME}:latest
+                    """
+                }
+            }
+
+
+    post {
+        success {
+            echo 'Pipeline Executed Successfully'
+        }
+
+        failure {
+            echo 'Pipeline Failed'
+        }
+    }
+}
